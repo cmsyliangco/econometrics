@@ -1,0 +1,264 @@
+---
+title: "Visualizing the Texas Winter Storm"
+output: html_document
+fontsize: 11pt
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = T,
+	message = FALSE,
+	warning = FALSE
+)
+
+# Set the graphical theme
+ggplot2::theme_set(ggplot2::theme_light())
+
+
+pacman::p_load(
+  AER,
+  tidyverse,
+  kableExtra,
+  modelsummary,
+  matrixStats,
+  scales
+)
+
+```
+
+Based on this [BuzzFeed article](https://www.buzzfeednews.com/article/peteraldhous/texas-winter-storm-power-outage-death-toll)
+
+In February 2021, Texas freezes. Temperatures plummet to -19°C (2°F). Power grids failed, water pipes burst, and 4.5 million homes lose power in the middle of winter. The state reported *only* 151 deaths -- despite the hospitals ran out of oxygen, households burned furniture for warmth, and patients could not get treatment in the crowded hospitals.
+
+
+BuzzFeed journalists noted inconsistencies. Harris County alone reported 40 deaths from hypothermia, where they normally only have 1-2 per winter. Emergency rooms logged thousands of carbon monoxide poisonings. Funeral homes ran out of space. Cardiovascular disease deaths doubled, deaths from "falling" tripled, and "unknown cases" surged. It was impossible to only have 151 people killed from the deadliest infrastructure failure in Texas history thus far. 
+
+This case study will uncover the true death toll of the February 2021 Texas winter storm. The official count was 151 deaths. BuzzFeed journalists suggested approximately 700. 
+
+
+### Setup
+
+```{r}
+# Download the mortality data
+raw <- read_csv(
+  url('https://raw.githubusercontent.com/BuzzFeedNews/2021-05-tx-winter-storm-deaths/main/data/mortality.csv')
+)
+
+# Process: filter states, build model, calculate excess deaths
+df <- raw %>% 
+  filter(jurisdiction %in% c("Texas", "Arkansas", "Louisiana", 
+                              "Mississippi", "Oklahoma", "New Mexico")) %>%
+  mutate(weekendingdate = as.Date(weekendingdate)) %>%  
+  rename(covid_deaths = covid_19_u071_underlying_cause_of_death)
+
+# Fit model on pre-COVID data to estimate expected deaths
+model <- lm(allcause ~ weekendingdate + weekendingdate:jurisdiction + 
+              jurisdiction * poly(mmwrweek, 7),
+            data = df %>% filter(weekendingdate < "2020-01-01"))
+
+# Generate predictions
+predictions <- predict(model, newdata = df, interval = "prediction") %>% 
+  data.frame()
+
+# Combine and calculate excess deaths
+df <- bind_cols(df, predictions) %>% 
+  mutate(
+    excess = allcause - fit,
+    net_excess = allcause - fit - covid_deaths,
+    net_excess_ub = allcause - upr - covid_deaths,
+    net_excess_lb = allcause - lwr - covid_deaths
+  ) %>% 
+  filter(weekendingdate > "2021-01-01" & weekendingdate <= "2021-03-06")
+```
+
+### Scatter plot
+a scatter plot of excess deaths overtime for Texas only
+
+```{r}
+# First, filter to just Texas
+texas <- df %>% 
+  filter(jurisdiction == "Texas")
+
+# Basic scatter plot
+ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_point()
+```
+
+There is a clear spike in the middle of February which was the week of the storm.
+
+### Part 3.1
+Modifying figure options
+
+```{r}
+# First, filter to just Texas
+texas <- df %>% 
+  filter(jurisdiction == "Texas")
+
+# Basic scatter plot
+ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_point(size=3, color="darkred")
+```
+
+## Part 4
+
+```{r}
+# Switch to bar chart
+ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_col()
+```
+
+The negative weeks (fewer deaths than expected) and positive weeks (more deaths) are now visually distinct.
+
+### 4.1
+Adding uncertainty with error bars
+
+```{r}
+ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_col() +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub))
+```
+
+### 4.2
+Modifying figure options
+
+```{r}
+ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_col(alpha = 0.6, fill="darkred") +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub), width = 0.6, linewidth = 0.3)
+```
+
+### Part 5
+Adding text annotations
+
+```{r}
+ ggplot(texas, 
+       aes(x = weekendingdate, y = net_excess)) +
+  geom_col(alpha = 0.6, fill="darkred") +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub), width = 0.6, linewidth = 0.3) +
+  geom_hline(yintercept = 0) +
+  annotate("text", 
+           x = as.Date("2021-02-20"), 
+           y = 900, 
+           label = "Power Grid Failure\nFebruary 14-20")
+```
+
+## Part 6
+Faceting
+
+```{r}
+ggplot(df, aes(x = weekendingdate, y = net_excess)) +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub), 
+                width = 0.6, linewidth = 0.3) +
+  geom_col(fill = "darkred", alpha = 0.6) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~jurisdiction)
+```
+
+Here, the story becomes clear: Texas has a massive spike, while the neighboring states don’t.
+
+### Part 6.2
+Modifying figure options
+
+```{r}
+ggplot(df, aes(x = weekendingdate, y = net_excess)) +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub), 
+                width = 0.6, linewidth = 0.3) +
+  geom_col(fill = "darkred", alpha = 0.6) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~jurisdiction, ncol = 2, scales = "free_y")
+```
+
+## Part 7
+
+```{r}
+ggplot(df, aes(x = weekendingdate, y = net_excess)) +
+  geom_errorbar(aes(ymin = net_excess_lb, ymax = net_excess_ub), 
+                width = 0.6, linewidth = 0.3) +
+  geom_col(fill = "darkred", alpha = 0.6) +
+  geom_hline(yintercept = 0) +
+  facet_wrap(~jurisdiction, ncol = 2) +
+  labs(
+    title = "The Hidden Death Toll of the Texas Winter Storm",
+    subtitle = "Excess deaths beyond COVID-19 and normal mortality",
+    x = "Week Ending Date",
+    y = "Excess Deaths",
+    caption = "Data: CDC via BuzzFeed News"
+  )
+```
+
+## Part 9
+Extension
+
+```{r}
+storm <- df %>% 
+  filter(weekendingdate == "2021-02-20")
+
+
+ggplot(storm, aes(x = jurisdiction, y = net_excess, fill = jurisdiction)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  labs(
+    title = "The Hidden Death Toll of Jurisdictions in February",
+    subtitle = "Excess deaths beyond COVID-19 and normal mortality on the storm week",
+    x = "Jurisdiction",
+    y = "Excess Deaths",
+    caption = "Data: CDC via BuzzFeed News")
+
+```
+
+## Part 10
+COVID challenge
+
+```{r}
+# load data
+confirmed <-  read_csv('https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv')
+
+# data processing
+df <- confirmed %>% 
+  rename(Country = 2,
+         Province = 1) %>%
+  filter(Country == "Canada",
+         !Province %in%  c("Diamond Princess","Grand Princess","Repatriated Travellers", "Northwest Territories", "Nunavut","Yukon"))
+
+df <- df %>%
+  pivot_longer(cols = -c("Province","Country", "Lat", "Long" ), names_to = "date" , values_to = "cases")
+
+df <- df %>%
+  mutate(date = lubridate::mdy(date))  %>%
+  filter(date >= "2020-03-01",
+         !Province %in% c("Repatriated Travellers", "Northwest Territories", "Nunavut","Yukon")) %>%
+  arrange(date) %>%
+  group_by(Province) %>%
+  mutate(new_cases = cases - lag(cases))
+```
+
+
+```{r}
+#install.packages("tidyquant")
+library(tidyquant)
+```
+
+
+```{r}
+ggplot(df, aes(y = new_cases, x = date)) +
+  geom_col() +
+  geom_line(alpha = 0.3) +
+  geom_ma(n = 7, color = "blue") + # 7-day moving average
+  # n is the number of periods for moving average
+  facet_wrap(~Province, scales = "free") +
+labs(
+    title = "Daily COVID-19 Cases by Province",
+    x = "Date",
+    y = "New Cases")
+
+```
+
+
+
+
